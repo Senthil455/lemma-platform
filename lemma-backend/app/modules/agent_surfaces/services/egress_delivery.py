@@ -47,6 +47,7 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.platforms.delivery import note_tried
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -54,11 +55,6 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
-)
-from app.modules.agent_surfaces.services.channel_lines import (
-    WRITTEN_BY_MEMBER,
-    ChannelLines,
-    ChannelLinesInDatabase,
 )
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
@@ -88,7 +84,6 @@ class SurfaceDelivery:
         surface_repository: SurfaceInstallationRepositoryPort,
         adapter_registry: SurfacePlatformAdapterRegistry,
         credential_resolver: SurfaceCredentialResolver,
-        channel_lines: ChannelLines | None = None,
         seats: ChannelSeats | None = None,
     ) -> None:
         # Every one of these is required, and `uow` most of all. The service
@@ -100,7 +95,6 @@ class SurfaceDelivery:
         self.surface_repository = surface_repository
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
-        self.channel_lines = channel_lines or ChannelLinesInDatabase(uow)
         self.seats = seats or ChannelSeatsInDatabase(uow)
 
     async def egress_credentials(
@@ -302,7 +296,7 @@ class SurfaceDelivery:
         Only a group's conversation can hold such a run, so nothing else pays
         for the lookup.
         """
-        if source.kind is not SourceKind.SHARED:
+        if source.kind is not SourceKind.CHAT:
             return False
         started = await agent_conversations.lemma_message_run_started_at(
             self.uow, conversation_id
@@ -411,6 +405,7 @@ class SurfaceDelivery:
         """
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(self.uow.session):
+            note_tried(target.surface.surface_type.value)
             try:
                 receipt = await target.adapter.deliver(
                     credentials=target.credentials,
@@ -454,21 +449,4 @@ class SurfaceDelivery:
             envelope=envelope,
             receipt=receipt,
         )
-        if envelope.text:
-            name = metadata.get("agent_display_name")
-            await self.channel_lines.said(
-                target=target,
-                conversation_id=conversation_id,
-                text=envelope.text,
-                agent_display_name=name if isinstance(name, str) else None,
-                written_by=_member_id(metadata.get(WRITTEN_BY_MEMBER)),
-            )
         return receipt
-
-
-def _member_id(value: object) -> UUID | None:
-    """The member a delivery names as its writer, if it names one."""
-    try:
-        return UUID(str(value)) if value else None
-    except ValueError:
-        return None

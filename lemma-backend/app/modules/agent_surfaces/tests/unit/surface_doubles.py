@@ -256,6 +256,12 @@ class _EmptyScalarResult:
 
 
 class _EmptyExecuteResult:
+    #: An update or delete that matched nothing.
+    rowcount = 0
+
+    def __iter__(self):
+        return iter(())
+
     def scalars(self):
         return _EmptyScalarResult()
 
@@ -330,9 +336,10 @@ class AnsweredAt:
             id=uuid4(),
             channel_id=uuid4(),
             pod_id=self.pod_id or (surface.pod_id if surface else uuid4()),
+            account_id=uuid4(),
             surface_id=self.surface_id,
             platform=self.platform,
-            kind=SourceKind.SHARED if self.is_group else SourceKind.PRIVATE,
+            kind=SourceKind.CHAT if self.is_group else SourceKind.PERSON,
             external_channel_id=(
                 self.external_channel_id
                 if self.is_group
@@ -556,7 +563,6 @@ def build_egress(
             for_surface=AsyncMock(return_value={}),
             for_platform=AsyncMock(return_value={}),
         ),
-        channel_lines=RecordingChannelLines(),
     )
     return SurfaceEgress(
         uow=doubles.uow,
@@ -767,26 +773,3 @@ def build_turn_starter(
         channel_lines=RecordingChannelLines(),
         **({"roster_reads": roster_reads} if roster_reads is not None else {}),
     )
-
-
-class RecordingNotificationWork:
-    """What a notification writes as work, recorded instead of written.
-
-    ``settled`` holds the ``NotificationSettled`` facts; ``events`` (when
-    given) receives them too, for a harness that reads one list.
-    """
-
-    def __init__(self, events: list | None = None) -> None:
-        self.settled_facts: list = []
-        self.armed: list = []
-        self._events = events
-
-    async def arm_expiry(self, uow, notification) -> None:
-        del uow
-        self.armed.append(notification)
-
-    async def settled(self, uow, fact) -> None:
-        del uow
-        self.settled_facts.append(fact)
-        if self._events is not None:
-            self._events.append(fact)

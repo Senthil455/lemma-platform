@@ -9,7 +9,9 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.channel_kind import ChannelKind
 from ...models.channel_list_response import ChannelListResponse
+from ...models.contact_status import ContactStatus
 from ...models.error_response import ErrorResponse
+from ...models.visibility import Visibility
 from ...types import UNSET, Response, Unset
 
 
@@ -17,8 +19,18 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
+    archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
+    joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -32,14 +44,70 @@ def _get_kwargs(
         json_kind = kind
     params["kind"] = json_kind
 
-    params["limit"] = limit
-
-    json_before: None | str | Unset
-    if isinstance(before, Unset):
-        json_before = UNSET
+    json_visibility: None | str | Unset
+    if isinstance(visibility, Unset):
+        json_visibility = UNSET
+    elif isinstance(visibility, Visibility):
+        json_visibility = visibility.value
     else:
-        json_before = before
-    params["before"] = json_before
+        json_visibility = visibility
+    params["visibility"] = json_visibility
+
+    json_q: None | str | Unset
+    if isinstance(q, Unset):
+        json_q = UNSET
+    else:
+        json_q = q
+    params["q"] = json_q
+
+    params["archived"] = archived
+
+    json_contact_id: None | str | Unset
+    if isinstance(contact_id, Unset):
+        json_contact_id = UNSET
+    elif isinstance(contact_id, UUID):
+        json_contact_id = str(contact_id)
+    else:
+        json_contact_id = contact_id
+    params["contact_id"] = json_contact_id
+
+    json_assignee: None | str | Unset
+    if isinstance(assignee, Unset):
+        json_assignee = UNSET
+    else:
+        json_assignee = assignee
+    params["assignee"] = json_assignee
+
+    params["unassigned"] = unassigned
+
+    json_status: None | str | Unset
+    if isinstance(status, Unset):
+        json_status = UNSET
+    elif isinstance(status, ContactStatus):
+        json_status = status.value
+    else:
+        json_status = status
+    params["status"] = json_status
+
+    params["needs_person"] = needs_person
+
+    params["joined"] = joined
+
+    json_source_surface: None | str | Unset
+    if isinstance(source_surface, Unset):
+        json_source_surface = UNSET
+    else:
+        json_source_surface = source_surface
+    params["source_surface"] = json_source_surface
+
+    json_cursor: None | str | Unset
+    if isinstance(cursor, Unset):
+        json_cursor = UNSET
+    else:
+        json_cursor = cursor
+    params["cursor"] = json_cursor
+
+    params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -89,18 +157,43 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
+    archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
+    joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -113,8 +206,18 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        visibility=visibility,
+        q=q,
+        archived=archived,
+        contact_id=contact_id,
+        assignee=assignee,
+        unassigned=unassigned,
+        status=status,
+        needs_person=needs_person,
+        joined=joined,
+        source_surface=source_surface,
+        cursor=cursor,
         limit=limit,
-        before=before,
     )
 
     response = client.get_httpx_client().request(
@@ -129,18 +232,43 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
+    archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
+    joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -154,8 +282,18 @@ def sync(
         pod_id=pod_id,
         client=client,
         kind=kind,
+        visibility=visibility,
+        q=q,
+        archived=archived,
+        contact_id=contact_id,
+        assignee=assignee,
+        unassigned=unassigned,
+        status=status,
+        needs_person=needs_person,
+        joined=joined,
+        source_surface=source_surface,
+        cursor=cursor,
         limit=limit,
-        before=before,
     ).parsed
 
 
@@ -164,18 +302,43 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
+    archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
+    joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -188,8 +351,18 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        visibility=visibility,
+        q=q,
+        archived=archived,
+        contact_id=contact_id,
+        assignee=assignee,
+        unassigned=unassigned,
+        status=status,
+        needs_person=needs_person,
+        joined=joined,
+        source_surface=source_surface,
+        cursor=cursor,
         limit=limit,
-        before=before,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -202,18 +375,43 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
+    archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
+    joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -228,7 +426,17 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             kind=kind,
+            visibility=visibility,
+            q=q,
+            archived=archived,
+            contact_id=contact_id,
+            assignee=assignee,
+            unassigned=unassigned,
+            status=status,
+            needs_person=needs_person,
+            joined=joined,
+            source_surface=source_surface,
+            cursor=cursor,
             limit=limit,
-            before=before,
         )
     ).parsed

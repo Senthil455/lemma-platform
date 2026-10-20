@@ -103,10 +103,10 @@ class ApprovalExecutor:
                 name=tool_name,
                 arguments=args or {},
                 agent_run_id=deps.agent_run_id,
-                # An approved answer to a question from outside the pod is a
-                # `respond_to_notification` call -- a tool the run carries as a
-                # capability, not in a toolset this would otherwise assemble.
-                include_notification_tools=True,
+                # The approved call may be `answer_question` -- carried by a
+                # run with questions waiting on its member as a capability,
+                # not in a toolset this would otherwise assemble.
+                include_question_tools=True,
             )
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):

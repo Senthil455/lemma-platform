@@ -46,7 +46,6 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
-    OUTSIDE_ANSWER_TOOL,
     Audience,
 )
 from app.modules.agent.domain.pausing_tools import (
@@ -288,12 +287,21 @@ async def append_notification_message(
     message: str,
     notification_id: UUID,
 ) -> None:
-    """Write an outbound notification into the recipient's thread.
+    """Write an outbound notification into the recipient's thread, once.
 
     Belongs to no run, which is the point: it is what makes the recipient's
     agent able to answer "yes" six hours later against a question it can
-    actually see in its own history.
+    actually see in its own history. A retried send of the same notification
+    finds it there and adds no second copy.
     """
+    from app.modules.agent.contracts.contact_conversations import (
+        notification_keyed,
+    )
+
+    if await notification_keyed(
+        uow, conversation_id, key="notification_id", value=str(notification_id)
+    ):
+        return
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
@@ -556,7 +564,6 @@ async def set_conversation_metadata_value(
 __all__ = [
     # The tool an approval card for an answer to someone outside the pod
     # approves; the surface renders that card in its own words.
-    "OUTSIDE_ANSWER_TOOL",
     # Re-exported because `resolve_pending_interaction` takes one, and the enum
     # itself lives in `domain`, which is not a surface another module may reach
     # into. A published function whose argument type is unreachable is not

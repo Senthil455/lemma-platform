@@ -45,6 +45,12 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_text,
     script_tool_call,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    contact_channel_id,
+    send_deliveries,
+    deliveries_of_line,
+    member_writes,
+)
 from app.modules.agent_surfaces.tests.e2e.test_telegram_group_outsiders_e2e import (
     _table,
 )
@@ -356,8 +362,11 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
             )
         )
     ).scalar_one()
-    # Keyed by the pod, so another of its widgets meets the same contact.
-    assert identity.value == "host:cust-42"
+    # Keyed by the pod and the product the widget speaks for, so another of
+    # its widgets for that product meets the same contact.
+    assert widget["host_issuer"] == "default"
+    assert identity.value == "host:default:cust-42"
+    assert identity.issuer == "default"
     assert identity.strength == "HOST"
     assert identity.contact_id == contact_id
 
@@ -379,6 +388,39 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
             )
         )
     ).scalars().all() == [identity]
+
+    # Another product's user 42 is somebody else.
+    elsewhere = await _widget(
+        authenticated_client, pod_id, name="Partner app", host_issuer="Partner-App"
+    )
+    assert elsewhere["host_issuer"] == "partner-app"
+    partner = await _session(
+        authenticated_client,
+        elsewhere["public_key"],
+        host_token=_host_token(
+            elsewhere["signing_secret"], elsewhere["public_key"], subject="cust-42"
+        ),
+    )
+    assert partner["is_contact"] is True
+    db_session.expire_all()
+    hosts = (
+        await db_session.execute(
+            select(ContactIdentityModel.value, ContactIdentityModel.contact_id).where(
+                ContactIdentityModel.pod_id == UUID(pod_id),
+                ContactIdentityModel.kind == "HOST",
+            )
+        )
+    ).all()
+    assert {value for value, _ in hosts} == {
+        "host:default:cust-42",
+        "host:partner-app:cust-42",
+    }
+    assert len({contact for _, contact in hosts}) == 2
+    unnamed = await authenticated_client.post(
+        f"/pods/{pod_id}/web-widgets",
+        json={"name": "Bad issuer", "host_issuer": "two words"},
+    )
+    assert unnamed.status_code == 422, unnamed.text
 
     # Rotating the secret retires every token signed with the old one, and the
     # sessions they opened.
@@ -833,7 +875,8 @@ async def test_the_live_stream_needs_a_session_and_a_conversation(
     assert visitor["title"]
 
 
-async def test_a_follow_up_waits_in_a_web_contacts_chat(
+@pytest.mark.drives_work
+async def test_a_members_line_waits_in_a_web_contacts_chat(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -859,16 +902,15 @@ async def test_a_follow_up_waits_in_a_web_contacts_chat(
         "items"
     ][0]["id"]
 
-    sent = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{contact}/messages",
-        json={"message": "It's back in stock."},
+    # A member writes in their channel; there is nobody to hand it to, so it
+    # waits in their web chat for their next visit.
+    channel = await contact_channel_id(authenticated_client, pod_id, contact)
+    written = await member_writes(
+        authenticated_client, pod_id, channel, "It's back in stock."
     )
-    assert sent.status_code == 200, sent.text
-    assert sent.json() | {"conversation_id": None} == {
-        "conversation_id": None,
-        "platform": "WEB",
-        "delivered": False,
-    }
+    await send_deliveries()
+    [delivery] = await deliveries_of_line(written["id"])
+    assert (delivery.platform, delivery.status.value) == ("WEB", "SENT")
     history = await authenticated_client.get(
         f"/public/web/{key}/history", headers=_as(visitor)
     )
@@ -1415,6 +1457,64 @@ async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(
     assert from_api.status_code == 403
     assert from_pages.status_code == 200, from_pages.text
     assert from_pages.headers["access-control-allow-origin"] == "https://pages.example"
+
+
+async def test_a_hosted_page_keeps_its_visitors_chat_in_a_cookie_of_its_own(
+    authenticated_client: AsyncClient, test_pod, monkeypatch
+):
+    """Safari clears what a script stores after a week; a first-party HttpOnly
+    cookie set by Lemma's own pages host it keeps. A widget on somebody else's
+    site gets no cookie: there it would be a third party's."""
+    widget = await _widget(authenticated_client, test_pod["id"], name="Kept")
+    key = widget["public_key"]
+    monkeypatch.setattr(
+        public_web_settings, "public_pages_url", "https://pages.example"
+    )
+    on_pages = {
+        "Host": "pages.example",
+        "Origin": "https://pages.example",
+        "Authorization": "",
+    }
+    cookie = f"lemma_chat_{UUID(widget['id']).hex}"
+
+    first = await authenticated_client.post(
+        f"/public/web/{key}/session", json={}, headers=on_pages
+    )
+    assert first.status_code == 200, first.text
+    set_cookie = first.headers["set-cookie"]
+    assert set_cookie.startswith(f"{cookie}=")
+    assert "HttpOnly" in set_cookie and "Secure" in set_cookie
+    assert "Path=/public/web" in set_cookie
+    # Sealed, never the secret itself.
+    sealed = first.cookies.get(cookie) or set_cookie.split(";")[0].split("=", 1)[1]
+    assert first.json()["secret"] not in set_cookie
+
+    # The page lost its storage; the cookie brings the visitor back.
+    back = await authenticated_client.post(
+        f"/public/web/{key}/session",
+        json={},
+        headers={**on_pages, "Cookie": f"{cookie}={sealed}"},
+    )
+    assert back.status_code == 200, back.text
+    assert _session_id(back.json()) == _session_id(first.json())
+
+    # A cookie this deployment did not seal is as if there were none: the
+    # bare secret, or anything else, starts a new chat.
+    for forged in (first.json()["secret"], "not-a-live-secret"):
+        fresh = await authenticated_client.post(
+            f"/public/web/{key}/session",
+            json={},
+            headers={**on_pages, "Cookie": f"{cookie}={forged}"},
+        )
+        assert fresh.status_code == 200, fresh.text
+        assert _session_id(fresh.json()) != _session_id(first.json())
+
+    monkeypatch.setattr(public_web_settings, "public_pages_url", None)
+    embedded = await authenticated_client.post(
+        f"/public/web/{key}/session", json={}, headers=_page()
+    )
+    assert embedded.status_code == 200, embedded.text
+    assert "set-cookie" not in embedded.headers
 
 
 def _solved(challenge: dict) -> str:

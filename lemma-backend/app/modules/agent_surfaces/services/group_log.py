@@ -1,14 +1,15 @@
-"""What a pod's bot has heard in a group, kept where the platform keeps nothing.
+"""What a pod's bot has heard in a group, as the lines of the group's channel.
 
-Every turn in a group runs in one person's conversation, so a run knows the
-group only through the background it is handed. Slack and Teams can fetch that
-fresh -- their history APIs are the source of truth. Telegram cannot (a bot may
-not read a group's history, and hears only what privacy mode lets through), and
-neither can WhatsApp. For those every group message the bot receives is a line
-of the group's channel (``app.modules.channels``), said by the member or the
-contact who wrote it, so the next turn -- a member's or a contact's -- knows
-what was said. The bot's own answers join it as they are delivered
-(``channel_lines``).
+Every message the bot receives in a group -- a Telegram or WhatsApp group, a
+Slack or Teams channel, a group DM -- is a line of the group's channel
+(``app.modules.channels``), said by the member or the contact who wrote it.
+That is the timeline the pod's members read in Lemma, and, where the platform
+cannot hand a run the group's history, the background the next turn is given:
+Telegram (a bot may not read a group's history, and hears only what privacy
+mode lets through) and WhatsApp. Slack and Teams channels are read fresh from
+the platform, whose history is the whole of it. The bot's own answers join
+the timeline as they are delivered (``channel_lines``), and a Slack or Teams
+thread is a thread there too.
 
 Logged only for groups the pod already knows (see ``domain/groups``). A chat
 nobody has brought the bot into properly is not recorded: there is nobody to
@@ -35,6 +36,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
+    is_group_dm,
 )
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.domain.models import (
@@ -54,13 +56,20 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
+from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
+from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
 from app.modules.agent_surfaces.services.sender_handles import group_handle
-from app.modules.agent_surfaces.services.slack_groups import note_slack_channel
 from app.modules.agent_surfaces.services.channel_places import (
     ChannelSeats,
     ChannelSeatsInDatabase,
 )
+from app.modules.agent_surfaces.services.workspace_channels import (
+    WORKSPACE_PLATFORMS,
+    note_workspace_channel,
+)
 from app.modules.channels.contracts import (
+    ChannelMessage,
+    NewLine,
     Principal,
     Reader,
     Sender,
@@ -72,6 +81,7 @@ from app.modules.channels.contracts import (
     source_by_id,
     speakers_in,
 )
+from app.modules.channels.contracts.lines import thread_root_at
 from app.modules.contacts.contracts import IdentityStrength, open_contact
 
 logger = get_logger(__name__)
@@ -87,9 +97,18 @@ _MAX_PARTICIPANTS = 20
 
 
 def keeps_group_log(platform: str) -> bool:
-    """Whether this platform's groups are logged by the pod rather than read live."""
+    """Whether a run reads this platform's groups from the pod's lines rather
+    than from the platform's own history."""
     capabilities = PLATFORM_CAPABILITIES.get(str(platform).upper())
     return capabilities is not None and not capabilities.reads_channel_history
+
+
+def background_from_log(parsed: ParsedInboundSurfaceEvent) -> bool:
+    """Whether this group's background is the pod's lines: a platform with no
+    history to read, or a Teams group chat, which is in no team's channels."""
+    return keeps_group_log(parsed.platform.value) or (
+        parsed.platform is SurfacePlatform.TEAMS and is_group_dm(parsed)
+    )
 
 
 async def group_source(uow: SqlAlchemyUnitOfWork, group: SurfaceGroup) -> Source | None:
@@ -123,35 +142,64 @@ class GroupLog:
         """
         if parsed.is_dm or not parsed.external_channel_id:
             return False
-        if parsed.platform is SurfacePlatform.SLACK:
-            # Slack keeps its own history; the pod keeps only the channel's row.
-            return await note_slack_channel(self.groups, self.seats, surfaces, parsed)
-        if (
-            not keeps_group_log(parsed.platform.value)
-            or not parsed.message_text.strip()
-        ):
-            return False
+        wrote = False
+        if parsed.platform in WORKSPACE_PLATFORMS:
+            # Routed one by one: its source is made as the bot first hears it.
+            wrote = await note_workspace_channel(
+                self.groups, self.seats, surfaces, parsed
+            )
+        if not parsed.message_text.strip():
+            return wrote
         known = await self.groups.list_for_channel(
             external_channel_id=parsed.external_channel_id,
             surface_ids=[surface.id for surface in surfaces],
         )
+        threaded = parsed.platform in WORKSPACE_PLATFORMS
         for group in known:
+            # A Slack or Teams thread is a thread here too.
+            root = (
+                await thread_root_at(
+                    self.uow,
+                    source_id=group.id,
+                    external_thread_id=parsed.external_thread_id,
+                    external_message_id=parsed.external_message_id,
+                )
+                if threaded
+                else None
+            )
+            said = await LineMarkup(self.uow).read(
+                parsed,
+                pod_id=group.pod_id,
+                channel_id=group.channel_id,
+                bot=Bot(surface_id=group.surface_id),
+            )
             await post(
                 self.uow,
                 channel_id=group.channel_id,
-                sender=await self._speaker(group, parsed),
-                text=parsed.message_text,
-                source_id=group.id,
-                external_message_id=parsed.external_message_id,
+                line=NewLine(
+                    sender=await self._speaker(group, parsed),
+                    text=said.text,
+                    parts=said.parts,
+                    source_id=group.id,
+                    external_message_id=parsed.external_message_id,
+                    external_thread_id=parsed.external_thread_id,
+                    thread_root_id=root,
+                    # What answers this line in place -- a member replying to
+                    # it in Lemma -- goes to its thread there.
+                    reply_ref=reply_ref_of(parsed),
+                ),
+                mentions=said.mentions,
+                mentioned_agents=said.agents,
             )
-        return bool(known)
+        return wrote or bool(known)
 
     async def _speaker(
         self, group: SurfaceGroup, parsed: ParsedInboundSurfaceEvent
     ) -> Sender:
         """Who said it: the member the pod resolved them to, else a contact."""
         name = parsed.sender_display_name
-        external_id = parsed.sender_external_user_id
+        # Teams resolves a person by their AAD object id, not the bot id.
+        external_id = parsed.sender_aad_object_id or parsed.sender_external_user_id
         if external_id:
             resolved = await self.external_users.resolved_users_by_external_ids(
                 platform=group.platform,
@@ -195,6 +243,9 @@ class GroupBackground:
     #: Empty for a contact's run, which is told no more about the pod than it
     #: can already read.
     participants: tuple[SurfaceGroupParticipant, ...] = ()
+    #: The lines read, as the pod reads them: what the run keeps a reference
+    #: to, and reads again -- for this reader -- whenever its prompt is built.
+    heard: tuple[ChannelMessage, ...] = ()
 
 
 async def group_background(
@@ -279,6 +330,7 @@ async def group_background(
         withheld=withheld,
         outside_authors=tuple(outside_authors),
         participants=participants,
+        heard=tuple(lines),
     )
 
 

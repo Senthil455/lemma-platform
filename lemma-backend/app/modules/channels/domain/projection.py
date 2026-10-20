@@ -13,7 +13,8 @@ cannot drift between them:
   (``withheld_from``): they may not be able to see what it was made from.
 * **A contact** -- a run answering them -- reads only what was said where they
   are: the lines from their own source, and none of those an agent wrote with
-  a member's own access. Never a private note.
+  a member's own access. Never a private note. A line is where they are when
+  it was heard there or carried there from Lemma (``place_id``).
 """
 
 from __future__ import annotations
@@ -23,7 +24,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.channels.domain.entities import ChannelMessage, SenderKind
+from app.modules.channels.domain.entities import (
+    ChannelMessage,
+    Principal,
+    SenderKind,
+)
 
 
 class Reader(BaseModel):
@@ -55,7 +60,7 @@ def may_read(reader: Reader, message: ChannelMessage) -> bool:
         return True
     if message.members_only:
         return False
-    if reader.source_id is None or message.source_id != reader.source_id:
+    if reader.source_id is None or message.place_id != reader.source_id:
         return False
     return not message.sender.used_a_members_access
 
@@ -67,7 +72,9 @@ def readable(
     return [message for message in messages if may_read(reader, message)]
 
 
-def withheld_from(message: ChannelMessage, *, user_id: UUID) -> bool:
+def withheld_from(
+    message: ChannelMessage, *, user_id: UUID, in_their_direct: bool = False
+) -> bool:
     """Whether the member ``user_id``, reading the timeline, is shown only that
     this answer was given -- not what it said.
 
@@ -75,10 +82,17 @@ def withheld_from(message: ChannelMessage, *, user_id: UUID) -> bool:
     read. It was posted where the people in the chat read it, but a member of
     the pod reading the timeline need not be one of them, and may not be able
     to see what it was made from. One whose principal is no longer known is
-    withheld from everybody.
+    withheld from everybody. Never withheld: a line in the reader's own direct
+    channel, which the agent posted there to tell them, and a question put to
+    the reader, which they have to read to answer.
     """
     sender = message.sender
     if sender.kind is not SenderKind.AGENT or not sender.used_a_members_access:
+        return False
+    if in_their_direct:
+        return False
+    question = message.question
+    if question is not None and question.awaits == Principal.member(user_id):
         return False
     behalf = sender.on_behalf_of
     return behalf is None or behalf.user_id != user_id

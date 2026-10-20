@@ -55,9 +55,10 @@ def _private_place(surface_id, *, ago: timedelta = timedelta()) -> Source:
         id=uuid4(),
         channel_id=uuid4(),
         pod_id=uuid4(),
+        account_id=uuid4(),
         surface_id=surface_id,
         platform="TELEGRAM",
-        kind=SourceKind.PRIVATE,
+        kind=SourceKind.PERSON,
         external_user_id="tg-user-1",
         last_inbound_at=datetime.now(timezone.utc) - ago,
     )

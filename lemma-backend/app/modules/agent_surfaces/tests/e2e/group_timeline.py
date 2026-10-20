@@ -22,6 +22,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.services.group_log import group_source
 from app.modules.channels.contracts import (
     ChannelMessage,
+    NewLine,
     Principal,
     Reader,
     Sender,
@@ -38,18 +39,26 @@ async def group_by_id(db_session: AsyncSession, group_id: UUID | str) -> Surface
 
 
 async def say(
-    db_session: AsyncSession, group: SurfaceGroup, text: str, *, sender: Sender
+    db_session: AsyncSession,
+    group: SurfaceGroup,
+    text: str,
+    *,
+    sender: Sender,
+    external_message_id: str | None = None,
 ) -> ChannelMessage:
-    """``sender`` said ``text`` in the group, heard where the bot hears it."""
+    """``sender`` said ``text`` in the group, heard where the bot hears it --
+    as the platform's message ``external_message_id``, where it matters."""
     uow = SqlAlchemyUnitOfWork(db_session)
     source = await group_source(uow, group)
     said = await post(
         uow,
         channel_id=source.channel_id,
-        sender=sender,
-        text=text,
-        source_id=source.id,
-        external_message_id=uuid4().hex,
+        line=NewLine(
+            sender=sender,
+            text=text,
+            source_id=source.id,
+            external_message_id=external_message_id or uuid4().hex,
+        ),
     )
     assert said is not None
     return said
